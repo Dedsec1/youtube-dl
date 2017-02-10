@@ -1,1 +1,1 @@
-cli: bin/youtube-dl
+cli: false
