@@ -1,25 +1,18 @@
 # coding: utf-8
-from __future__ import unicode_literals, division
+from __future__ import unicode_literals
 
 import re
 
 from .common import InfoExtractor
-from ..compat import (
-    compat_chr,
-    compat_ord,
-)
+from ..compat import compat_chr
 from ..utils import (
     determine_ext,
     ExtractorError,
 )
-from ..jsinterp import (
-    JSInterpreter,
-    _NAME_RE
-)
 
 
 class OpenloadIE(InfoExtractor):
-    _VALID_URL = r'https?://openload\.(?:co|io)/(?:f|embed)/(?P<id>[a-zA-Z0-9-_]+)'
+    _VALID_URL = r'https?://(?:openload\.(?:co|io)|oload\.tv)/(?:f|embed)/(?P<id>[a-zA-Z0-9-_]+)'
 
     _TESTS = [{
         'url': 'https://openload.co/f/kUEfGclsU9o',
@@ -28,7 +21,7 @@ class OpenloadIE(InfoExtractor):
             'id': 'kUEfGclsU9o',
             'ext': 'mp4',
             'title': 'skyrim_no-audio_1080.mp4',
-            'thumbnail': 're:^https?://.*\.jpg$',
+            'thumbnail': r're:^https?://.*\.jpg$',
         },
     }, {
         'url': 'https://openload.co/embed/rjC09fkPLYs',
@@ -36,7 +29,7 @@ class OpenloadIE(InfoExtractor):
             'id': 'rjC09fkPLYs',
             'ext': 'mp4',
             'title': 'movie.mp4',
-            'thumbnail': 're:^https?://.*\.jpg$',
+            'thumbnail': r're:^https?://.*\.jpg$',
             'subtitles': {
                 'en': [{
                     'ext': 'vtt',
@@ -60,45 +53,16 @@ class OpenloadIE(InfoExtractor):
         # for title and ext
         'url': 'https://openload.co/embed/Sxz5sADo82g/',
         'only_matching': True,
+    }, {
+        'url': 'https://oload.tv/embed/KnG-kKZdcfY/',
+        'only_matching': True,
     }]
 
-    def openload_decode(self, txt):
-        symbol_dict = {
-            '(ﾟДﾟ) [ﾟΘﾟ]': '_',
-            '(ﾟДﾟ) [ﾟωﾟﾉ]': 'a',
-            '(ﾟДﾟ) [ﾟΘﾟﾉ]': 'b',
-            '(ﾟДﾟ) [\'c\']': 'c',
-            '(ﾟДﾟ) [ﾟｰﾟﾉ]': 'd',
-            '(ﾟДﾟ) [ﾟДﾟﾉ]': 'e',
-            '(ﾟДﾟ) [1]': 'f',
-            '(ﾟДﾟ) [\'o\']': 'o',
-            '(oﾟｰﾟo)': 'u',
-            '(ﾟДﾟ) [\'c\']': 'c',
-            '((ﾟｰﾟ) + (o^_^o))': '7',
-            '((o^_^o) +(o^_^o) +(c^_^o))': '6',
-            '((ﾟｰﾟ) + (ﾟΘﾟ))': '5',
-            '(-~3)': '4',
-            '(-~-~1)': '3',
-            '(-~1)': '2',
-            '(-~0)': '1',
-            '((c^_^o)-(c^_^o))': '0',
-        }
-        delim = '(ﾟДﾟ)[ﾟεﾟ]+'
-        end_token = '(ﾟДﾟ)[ﾟoﾟ]'
-        symbols = '|'.join(map(re.escape, symbol_dict.keys()))
-        txt = re.sub('(%s)\+\s?' % symbols, lambda m: symbol_dict[m.group(1)], txt)
-        ret = ''
-        for aacode in re.findall(r'{0}\+\s?{1}(.*?){0}'.format(re.escape(end_token), re.escape(delim)), txt):
-            for aachar in aacode.split(delim):
-                if aachar.isdigit():
-                    ret += compat_chr(int(aachar, 8))
-                else:
-                    m = re.match(r'^u([\da-f]{4})$', aachar)
-                    if m:
-                        ret += compat_chr(int(m.group(1), 16))
-                    else:
-                        self.report_warning("Cannot decode: %s" % aachar)
-        return ret
+    @staticmethod
+    def _extract_urls(webpage):
+        return re.findall(
+            r'<iframe[^>]+src=["\']((?:https?://)?(?:openload\.(?:co|io)|oload\.tv)/embed/[a-zA-Z0-9-_]+)',
+            webpage)
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
@@ -107,36 +71,55 @@ class OpenloadIE(InfoExtractor):
         if 'File not found' in webpage or 'deleted by the owner' in webpage:
             raise ExtractorError('File not found', expected=True)
 
-        # The following decryption algorithm is written by @yokrysty and
-        # declared to be freely used in youtube-dl
-        # See https://github.com/rg3/youtube-dl/issues/10408
-        enc_data = self._html_search_regex(
-            r'<span[^>]*>([^<]+)</span>\s*<span[^>]*>[^<]+</span>\s*<span[^>]+id="streamurl"',
-            webpage, 'encrypted data')
-
-        enc_code = self._html_search_regex(r'<script[^>]+>(ﾟωﾟ[^<]+)</script>',
-                                           webpage, 'encrypted code')
-
-        js_code = self.openload_decode(enc_code)
-        jsi = JSInterpreter(js_code)
-
-        m_offset_fun = self._search_regex(r'slice\(0\s*-\s*(%s)\(\)' % _NAME_RE, js_code, 'javascript offset function')
-        m_diff_fun = self._search_regex(r'charCodeAt\(0\)\s*\+\s*(%s)\(\)' % _NAME_RE, js_code, 'javascript diff function')
-
-        offset = jsi.call_function(m_offset_fun)
-        diff = jsi.call_function(m_diff_fun)
+        ol_id = self._search_regex(
+            '<span[^>]+id="[^"]+"[^>]*>([0-9A-Za-z]+)</span>',
+            webpage, 'openload ID')
 
         video_url_chars = []
 
-        for idx, c in enumerate(enc_data):
-            j = compat_ord(c)
-            if j >= 33 and j <= 126:
-                j = ((j + 14) % 94) + 33
-            if idx == len(enc_data) - offset:
-                j += diff
-            video_url_chars += compat_chr(j)
+        first_char = ord(ol_id[0])
+        key = first_char - 55
+        maxKey = max(2, key)
+        key = min(maxKey, len(ol_id) - 38)
+        t = ol_id[key:key + 36]
 
-        video_url = 'https://openload.co/stream/%s?mime=true' % ''.join(video_url_chars)
+        hashMap = {}
+        v = ol_id.replace(t, '')
+        h = 0
+
+        while h < len(t):
+            f = t[h:h + 3]
+            i = int(f, 8)
+            hashMap[h / 3] = i
+            h += 3
+
+        h = 0
+        H = 0
+        while h < len(v):
+            B = ''
+            C = ''
+            if len(v) >= h + 2:
+                B = v[h:h + 2]
+            if len(v) >= h + 3:
+                C = v[h:h + 3]
+            i = int(B, 16)
+            h += 2
+            if H % 3 == 0:
+                i = int(C, 8)
+                h += 1
+            elif H % 2 == 0 and H != 0 and ord(v[H - 1]) < 60:
+                i = int(C, 10)
+                h += 1
+            index = H % 12
+
+            A = hashMap[index]
+            i ^= 213
+            i ^= A
+            video_url_chars.append(compat_chr(i))
+            H += 1
+
+        video_url = 'https://openload.co/stream/%s?mime=true'
+        video_url = video_url % (''.join(video_url_chars))
 
         title = self._og_search_title(webpage, default=None) or self._search_regex(
             r'<span[^>]+class=["\']title["\'][^>]*>([^<]+)', webpage,
@@ -152,8 +135,7 @@ class OpenloadIE(InfoExtractor):
             'thumbnail': self._og_search_thumbnail(webpage, default=None),
             'url': video_url,
             # Seems all videos have extensions in their titles
-            'ext': determine_ext(title),
+            'ext': determine_ext(title, 'mp4'),
             'subtitles': subtitles,
         }
-
         return info_dict
